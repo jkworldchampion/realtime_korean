@@ -1,73 +1,186 @@
-import tempfile
 import streamlit as st
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.llms import Ollama
-from langchain.document_loaders import PyPDFLoader
+import streamlit.components.v1 as components
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from threading import Thread
 
-# Ollama 언어 모델 서버의 기본 URL
+# Ollama language model server's base URL
 CUSTOM_URL = "http://localhost:11434"
 
-
-# 요약을 위한 Ollama 언어 모델 초기화
+# Initialize the LLM for translation
 llm = Ollama(
-    model="llama3", 
-    base_url=CUSTOM_URL, 
-    temperature=0,    
+    model="llama3.1:8b",
+    base_url=CUSTOM_URL,
+    temperature=0,
     num_predict=200
 )
 
-# PDF 파일을 읽고 처리하기 위한 함수
-def read_file(file_name):
-    with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tf.write(file_name.getbuffer())
-        file_path = tf.name
-    loader = PyPDFLoader(file_path)
-    documents = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=3000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""],
-        length_function=len,
-    )
-    return text_splitter.split_documents(documents)
-
-# 문서 청크 리스트가 있으면 번역을 해주는 함수
-def translate_documents(txt_input):
-
+# Translation function using the LLM
+def translate_text(text):
     map_prompt_template = """
-    - you are a professional translator
-    - translate the provided content into English
-    - only respond with the translation
+    - you are a professional interpreter who translates for university classes
+    - translate the provided content into Korean
+    - only respond with the translation, Do not use any English
+    - The following are all sentences that should be translated, even if they are short, so just give us the translated results.
     {text}
     """
-    translation_result = ""
-    message_placeholder = st.empty()
+    prompt_text = map_prompt_template.format(text=text)
+    stream_generator = llm.stream(prompt_text)
     
-    for doc in txt_input:
-        prompt_text = map_prompt_template.format(text=doc)
-        stream_generator = llm.stream(prompt_text)
-        
-        for chunk in stream_generator:
-            translation_result += chunk
-            message_placeholder.markdown(translation_result)
+    translation_result = ""
+    for chunk in stream_generator:
+        translation_result += chunk
+    return translation_result
 
-# Streamlit 앱의 제목 구성
-st.title(" 🦜 PDF을 번역해드려요")
+# Create Flask app
+app = Flask(__name__)
+CORS(app)  # Enable CORS
+
+# Endpoint to handle translation requests
+@app.route('/translate_text', methods=['POST'])
+def translate_text_endpoint():
+    data = request.get_json()
+    text_to_translate = data.get('text', '')
+    # Call the translation function
+    translated_text = translate_text(text_to_translate)
+    return jsonify({'translatedText': translated_text})
+
+def run_flask():
+    app.run(port=9020, threaded=True)
 
 def main():
-    """
-    Streamlit 앱을 실행하는 메인 함수.
-    """
-    if 'translation_result' not in st.session_state:
-        st.session_state.translation_result = ""
+    st.title("🦜앵무 Say🦜")
 
-    st.markdown("#### PDF 업로드 ▼ ")
-    uploaded_file = st.file_uploader('pdfuploader', label_visibility="hidden", accept_multiple_files=False, type="pdf")
-    
-    if uploaded_file is not None:
-        txt_input = read_file(uploaded_file)
-        with st.spinner("문서를 번역하는 중..."):
-            translate_documents(txt_input)
+    # Start the Flask app
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Your existing Streamlit code
+    col1, col2 = st.columns(2)
+    col1.write("인식")
+    user_input = st.text_input("사용자 음성 입력:")
+
+    col2.write("번역")
+
+    # Embed the HTML and JavaScript
+    html_code = """
+    <!DOCTYPE html>
+    <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>음성 인식</title>
+        </head>
+        <style>
+            html, body {
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center; /* Center content horizontally */
+                justify-content: flex-start; /* Align content at the top */
+                background-color: #f4f4f4; /* Background color for aesthetics */
+            }
+            /* Style for scrollable transcript and translated sections */
+            #transcript, #translated {
+                max-height: 200px;  /* Set a max height for the elements */
+                overflow-y: auto;   /* Enable vertical scrolling when content exceeds the height */
+                padding: 10px;
+                border: 1px solid #ccc;
+                margin: 10px 0;
+                width: 80%; /* Set a reasonable width */
+            }
+
+            /* Optional: Add some style to buttons */
+            button {
+                margin: 10px;
+                padding: 10px 20px;
+                font-size: 16px;
+            }
+        </style>
+        <body>
+            <button id="start-btn">음성 인식 시작</button>
+            <button id="stop-btn">음성 인식 중지</button>
+            <p id="transcript">음성 인식 결과가 여기에 표시됩니다: <br></p>
+            <p id="translated">번역 결과가 여기에 표시됩니다: <br></p>
+            <script>
+                const startBtn = document.getElementById('start-btn');
+                const stopBtn = document.getElementById('stop-btn');
+                const transcriptElement = document.getElementById('transcript');
+                const translatedElement = document.getElementById('translated');
+
+                let recognition;
+                let pendingText = '';
+
+                if (!('webkitSpeechRecognition' in window)) {
+                    transcriptElement.innerText = "이 브라우저에서는 Web Speech API가 작동하지 않습니다...";
+                } else {
+                    recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                    recognition.lang = 'en-US';  // 'ko-KR' or 'en-US'
+                    recognition.interimResults = false;
+                    recognition.continuous = true;
+
+                    recognition.onresult = function(event) {
+                        let currentTranscript = transcriptElement.innerText;
+                        let newTranscript = '';
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            newTranscript += event.results[i][0].transcript;
+                        }
+                        transcriptElement.innerText = currentTranscript + newTranscript;
+                        pendingText += newTranscript;
+                    };
+
+                    recognition.onerror = function(event) {
+                        console.error('Speech recognition error:', event.error);
+                    };
+
+                    recognition.onend = function() {
+                        console.log('Speech recognition ended');
+                    };
+
+                    startBtn.addEventListener('click', function() {
+                        if (recognition) {
+                            recognition.start();
+                        }
+                    });
+
+                    stopBtn.addEventListener('click', function() {
+                        if (recognition) {
+                            recognition.stop();
+                        }
+                    });
+                }
+
+                // Every 5 seconds, translate the pending text
+                setInterval(() => {
+                    if (pendingText.trim() !== '') {
+                        fetch('http://localhost:9020/translate_text', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ text: pendingText }),
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            // Display the translated text
+                            translatedElement.innerHTML += data.translatedText + '<br>';
+                            // Clear the pending text
+                            pendingText = '';
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                        });
+                    }
+                }, 5000);
+            </script>
+
+        </body>
+    </html>
+    """
+    components.html(html_code, height=400)
 
 if __name__ == "__main__":
     main()

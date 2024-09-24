@@ -19,9 +19,9 @@ llm = Ollama(
 # Translation function using the LLM
 def translate_text(text):
     map_prompt_template = """
-    - you are a professional translator
-    - translate the provided content into English
-    - only respond with the translation, Do not use any Korean 
+    - you are a professional interpreter who translates for university classes
+    - translate the provided content into French
+    - only respond with the translation
     {text}
     """
     prompt_text = map_prompt_template.format(text=text)
